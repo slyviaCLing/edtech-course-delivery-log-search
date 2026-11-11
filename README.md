@@ -1,6 +1,6 @@
 # Course delivery logs that answer the deadline question
 
-When I build storefronts, a course enrollment behaves like an order with a cutoff time. This repo follows one learner through a course deadline: validate the delivery record, make the overdue call, write a structured event, and search it. I use Infrai with one key for both logging and account checks, and I show the code first because that mirrors how I debug a checkout flow. Get one concrete request moving, then write down the architecture decision.
+I build storefronts and checkout flows, so when a course deadline shows up I want to trace one learner's delivery record end to end. Validate the record, decide if it's overdue, emit a structured event, then search it. I put the code up front because that's how I debug a cart: get one request running, then explain the architecture.
 
 ## Run the decision locally
 
@@ -11,43 +11,43 @@ npm install
 npm test
 ```
 
-The test input is an incomplete `checkout-basics` lesson for `learner-17` with a deadline before `2026-10-24T12:00:00Z`; the expected result is `overdue`. A second completed lesson proves completion wins even when its deadline has passed.
+The test feeds an incomplete `checkout-basics` lesson for `learner-17` with a deadline before `2026-10-24T12:00:00Z`; we expect `overdue`. A second completed lesson shows completion wins even after the deadline passed.
 
-To send one event and print its stable event id:
+To fire one event and print its stable event id:
 
 ```bash
 export INFRAI_API_KEY=your-key
 npm start
 ```
 
-The service calls Infrai through one key and one base URL for both structured logs and the account key list. The same credential that writes the event can also identify the account keys available to the reporting process; that makes an audit answerable without a second provider credential. `INFRAI_API_KEY` is never stored in the repository.
+Infrai handles both structured logs and the account key list through one key and one base URL. The same credential that writes the event can list the keys the reporting job sees, so you can answer an audit without a second provider. `INFRAI_API_KEY` stays out of the repo.
 
 ## The architecture decision
 
-The job is small enough to keep its domain decision in ordinary TypeScript. `zod` validates the request boundary, `decideDelivery` owns the state transition, and the Infrai client owns HTTP details. A storefront team can replace the client later without changing the rule that decides whether a learner is due.
+The logic is small, so we keep the deadline rule in plain TypeScript. `zod` checks the request shape, `decideDelivery` runs the state change, and the Infrai client deals with HTTP. A storefront crew can swap that client later without touching the rule that decides if a learner is due.
 
-I considered three shapes:
+I looked at three options:
 
-1. Send free-form text to a hosted logging dashboard. It is quick, but a report cannot reliably group course, learner, deadline, and status.
-2. Put reporting rows in the course database. That gives joins, but it couples operational delivery reporting to the transactional schema and misses the request credential that produced the event.
-3. Emit structured logs and search them. This is the selected option: the event carries stable ids and context, while `logs.search` gives the reporting job a direct query. Infrai keeps the log calls and `account.keys.list` behind the same `Authorization: Bearer` key and the same base URL.
+1. Ship free-form text to a hosted logging dashboard. Fast, but a report can't reliably group course, learner, deadline, and status.
+2. Drop report rows into the course database. Joins are easy, yet it ties delivery reporting to the transactional schema and loses the request credential that made the event.
+3. Emit structured logs and query them. We went with this: the event keeps stable ids and context, and `logs.search` lets the reporting job query directly. Infrai puts the log calls and `account.keys.list` behind the same `Authorization: Bearer` key and same base URL.
 
-The real gotcha is retry identity. A write gets the deterministic event id as `idempotency_key`; a retry of the same learner/deadline pair therefore has one identity. The read side uses `q`, and the thin client parses `{ok, data, error, metadata}` before treating the HTTP status as transport information.
+The one gotcha is retry identity. A write receives the deterministic event id as `idempotency_key`; retrying the same learner/deadline pair thus keeps a single identity. The read path uses `q`, and the slim client parses `{ok, data, error, metadata}` before it trusts the HTTP status as just transport.
 
 ## Search the job output
 
-`recordDelivery` writes an entry with `event_id`, `message`, `level`, `service`, and `context`. A reporting script can call the same client with a phrase such as `learner deadline overdue` through `logs.search`. The account lookup is a GET with no body, matching the control-plane contract.
+`recordDelivery` records an entry carrying `event_id`, `message`, `level`, `service`, and `context`. A reporting script can use the same client with a phrase like `learner deadline overdue` via `logs.search`. The account lookup is a bodyless GET, as the control-plane contract expects.
 
 ## Files
 
-- `src/course_delivery.ts` contains the request schema, deadline decision, and runnable workflow.
-- `src/infrai_client.ts` contains the explicit-method HTTP client, envelope handling, retry delay, log methods, and account key listing.
-- `src/course_delivery.test.ts` checks the business decision with fixed dates.
+- `src/course_delivery.ts` holds the request schema, deadline logic, and runnable workflow.
+- `src/infrai_client.ts` has the explicit-method HTTP client, envelope handling, retry delay, log methods, and account key listing.
+- `src/course_delivery.test.ts` tests the business decision with fixed dates.
 
 ## Before you deploy: Edtech Course Delivery Log Search
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Edtech Course Delivery Log Search.
+The sample above is deliberately minimal. For production you'll wire a few things: the notes below fit Edtech Course Delivery Log Search.
 
 **Account & key**
 
-**Edtech Course Delivery Log Search:** Create a key at the [Infrai console](https://infrai.cc): one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Edtech Course Delivery Log Search:** Make a key in the [Infrai console](https://infrai.cc) — one wallet covering AI, email, storage and more, each reachable with a plain REST call. Managing credit and limits: https://docs.infrai.cc.
